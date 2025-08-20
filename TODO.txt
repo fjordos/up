@@ -1,0 +1,133 @@
+It's a secure hosting environment management tool with Django for common websites and modern
+containerized applications.
+The central management works with up command in CLI, and the functions is available via API as well.
+I plan to create a GUI with a modern React/node.js frontend later.
+
+I think to separate the tasks to admin and user sides.
+For the admin:
+ - manage a Nginx Reverse Proxy for every IPs or IP group
+ - connect to the local or remote libvirtd services
+ - update hypervisors and networks
+ - create, move, reboot, resize and destroy VMs
+ - install, update and maintain the required environments on VMs or dedicated servers
+ - update and manage podman containers on VMs and dedicated servers
+ - create, attach, resize, optimize storages for libvirt and containerd
+ - attach dynamically the necessary user's file to target VMs and containers as shared directory or block device.
+ - manage the backup/restore functions
+ - user management
+ - mount remote shares and disks (dynamically for users or permanent for environments)
+For the users:
+ - create, delete, edit websites. Use ansible playbooks and jinja templates for apply the required functions.
+ - create, delete, edit databases and its users. Pairing them as the user wants. Store data locally.
+ - create, delete, edit mail domains, addresses, aliases and lists. Store data locally.
+ - create, delete, edit DNS domains and records. Store the data locally and apply them with RFC2136
+ - initiate full or partial backup
+ - create and manage local SFTP, FTP, SSH users for the owned resources (direct login to the user's containers)
+ - resource shares (availability to cross mount or network tunel between the containers). Mandaroty to mutual enable
+   on both side
+For the Up daemon:
+ - auto-maintains the environment with check, repair and alarm function
+ - required to create a check function for the all deployed function what periodically the health status
+   and send alarm when could not fix automatically
+ - log security monitoring
+ - security monitoring with checks
+For general reason:
+ - must to use SSL/TLS functions and certbot maintained certifications for all site functions (API, mail and DB
+   servers...)
+ - deploy certifications with certbot for users apps and websites as they set the domains.
+ - Every Nginx Reverse Proxy has to assign a wildcard domain, and the user's service have to get a subdomain for
+   temporary domain.
+ - a user cannot access to another user's resource locally, just via the public interfaces
+
+The layer should be on the front a Nginx server, that provide the static file locally, and another requests are forward
+ to the VMs/containers, and they will provide the services as podman containers by separated users for the all users
+ (the dynamic user mapping is important).
+
+Planned Secure Hosting Environment Architecture
+
+┌─────────────────────────────────────────────────────────────────┐
+│                         Client Requests                         │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+┌───────────────────────────────▼─────────────────────────────────┐
+│                           Firewall                              │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+┌───────────────────────────────▼─────────────────────────────────┐
+│                      Nginx Reverse Proxy 1                      │
+│    ┌───────────────────┐    ┌─────────────────────────────┐     │
+│    │ Static File       │    │ Dynamic Request Forwarding  │     │
+│    │ Serving           │    │ to VMs/Containers           │     │
+│    └───────────────────┘    └─────────────────────────────┘     │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+┌───────────────────────────────▼─────────────────────────────────┐
+│                         Machines Layer                          │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                       Hypervisor 1                         │ │
+│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │ │
+│  │  │      VM 1-1   │  │      VM 1-2   │  │       VM 1-n  │   │ │
+│  │  │ ┌───────────┐ │  │ ┌───────────┐ │  │ ┌───────────┐ │   │ │
+│  │  │ │ Podman    │ │  │ │ Podman    │ │  │ │ Podman    │ │   │ │
+│  │  │ │ Containers│ │  │ │ Containers│ │  │ │ Containers│ │   │ │
+│  │  │ └───────────┘ │  │ └───────────┘ │  │ └───────────┘ │   │ │
+│  │  └───────────────┘  └───────────────┘  └───────────────┘   │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                       Hypervisor 2                         │ │
+│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │ │
+│  │  │      VM 2-1   │  │      VM 2-2   │  │       VM 2-n  │   │ │
+│  │  │ ┌───────────┐ │  │ ┌───────────┐ │  │ ┌───────────┐ │   │ │
+│  │  │ │ Podman    │ │  │ │ Podman    │ │  │ │ Podman    │ │   │ │
+│  │  │ │ Containers│ │  │ │ Containers│ │  │ │ Containers│ │   │ │
+│  │  │ └───────────┘ │  │ └───────────┘ │  │ └───────────┘ │   │ │
+│  │  └───────────────┘  └───────────────┘  └───────────────┘   │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                       Hypervisor n                         │ │
+│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │ │
+│  │  │      VM n-1   │  │      VM n-2   │  │       VM n-n  │   │ │
+│  │  │ ┌───────────┐ │  │ ┌───────────┐ │  │ ┌───────────┐ │   │ │
+│  │  │ │ Podman    │ │  │ │ Podman    │ │  │ │ Podman    │ │   │ │
+│  │  │ │ Containers│ │  │ │ Containers│ │  │ │ Containers│ │   │ │
+│  │  │ └───────────┘ │  │ └───────────┘ │  │ └───────────┘ │   │ │
+│  │  └───────────────┘  └───────────────┘  └───────────────┘   │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
+│  │   Dedicated 1   │  │  Dedicated 2    │  │  Dedicated n    │  │
+│  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │  │
+│  │  │ Podman    │  │  │  │ Podman    │  │  │  │ Podman    │  │  │
+│  │  │ Containers│  │  │  │ Containers│  │  │  │ Containers│  │  │
+│  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                  Central Management System                      │
+│                        ("up" command)                           │
+├─────────────────────────────┬───────────────────────────────────┤
+│      Admin Operations       │       User Operations             │
+├─────────────────────────────┼───────────────────────────────────┤
+│ - Libvirtd management       │ - Website Management              │
+│ - VM Management             │ - Database Management             │
+│ - Storage Management        │ - Mail Management                 │
+│ - Container Management      │ - DNS Management                  │
+│ - User Management           │ - Backup Requests                 │
+│ - Backup/Restore            │ - SFTP, FTP, SSH logins           │
+│ - Dynamic File Mapping      │                                   │
+│ - Mounting                  │                                   │
+└─────────────────────────────┴───────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                 Monitoring & Auto-Maintenance                   │
+│   - Health Checks  - Automatic Recovery  - Security Monitoring  │
+└─────────────────────────────────────────────────────────────────┘
+
+
+TODO:
+ - Automated failover recovery
+ - HA and anti-affinity option
+ - Automated resource assigning and merging on the available resources (Dedicated/VM -> Containers -> user resources)
+ - Set on maintain by labels or a similar method
+ - log and security monitoring with localAI
+ - user-mount of remote shares or disks
