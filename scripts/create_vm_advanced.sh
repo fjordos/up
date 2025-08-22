@@ -12,7 +12,7 @@ DISK_PATH="/var/lib/libvirt/images/${VM_NAME}.qcow2"
 VM_HOSTNAME="${VM_NAME}"
 SHARED_DIR="/mnt/${VM_NAME}"
 NETWORK_NAME="default"
-CLOUD_INIT_DIR="/var/lib/libvirt/cloud-init/${VM_NAME}"
+VM_DATA_DIR="/var/lib/libvirt/data/${VM_NAME}"
 CLOUD_IMAGES_DIR="/var/lib/libvirt/images/cloud"
 CAN_DELETE=${CAN_DELETE:-1}
 
@@ -101,7 +101,7 @@ get_next_available_ip() {
 # Function to generate unique SSH key for VM
 generate_vm_ssh_key() {
     local vm_name="$1"
-    local ssh_dir="/var/lib/libvirt/ssh-keys/${vm_name}"
+    local ssh_dir="/var/lib/libvirt/cloud-init/${vm_name}"
     local private_key="$ssh_dir/id_rsa"
     local public_key="$ssh_dir/id_rsa.pub"
 
@@ -151,7 +151,7 @@ create_user_data() {
     local vm_hostname="$2"
     local ssh_public_key="$3"
 
-    cat > "$CLOUD_INIT_DIR/user-data" << EOF
+    cat > "$VM_DATA_DIR/user-data" << EOF
 #cloud-config
 hostname: $vm_hostname
 fqdn: ${vm_hostname}.local
@@ -250,7 +250,7 @@ create_meta_data() {
     local vm_name="$1"
     local vm_hostname="$2"
 
-    cat > "$CLOUD_INIT_DIR/meta-data" << EOF
+    cat > "$VM_DATA_DIR/meta-data" << EOF
 instance-id: $vm_name
 local-hostname: $vm_hostname
 EOF
@@ -260,7 +260,7 @@ EOF
 create_network_config() {
     local vm_ip="$1"
 
-    cat > "$CLOUD_INIT_DIR/network-config" << EOF
+    cat > "$VM_DATA_DIR/network-config" << EOF
 version: 2
 ethernets:
   enp1s0:
@@ -431,6 +431,8 @@ logger "Creating VM: $VM_NAME"
 logger "Memory: ${MEMORY_GB}GB, vCPUs: $VCPUS, Disk: ${DISK_SIZE_GB}GB"
 logger "Cloud Image: $VM_OS"
 
+mkdir -p $VM_DATA_DIR
+
 # Download cloud image
 CLOUD_IMAGE_PATH=$(download_cloud_image "$VM_OS")
 
@@ -438,7 +440,6 @@ CLOUD_IMAGE_PATH=$(download_cloud_image "$VM_OS")
 if [[ ! -f "$DISK_PATH" ]]; then
     logger "Creating VM disk from cloud image..."
     cp "$CLOUD_IMAGE_PATH" "$DISK_PATH"
-    #qemu-img resize "$DISK_PATH" "${DISK_SIZE_GB}G"
 else
     logger "VM disk already exists: $DISK_PATH"
 fi
@@ -466,17 +467,16 @@ fi
 # Generate unique SSH key for VM
 logger "Generating unique SSH key for VM..."
 VM_SSH_PUBLIC_KEY=$(generate_vm_ssh_key "$VM_NAME")
-VM_SSH_PRIVATE_KEY="/var/lib/libvirt/ssh-keys/${VM_NAME}/id_rsa"
+VM_SSH_PRIVATE_KEY="/var/lib/libvirt/cloud-init/${VM_NAME}/id_rsa"
 
 logger "✓ SSH key generated"
-logger "  Public key: /var/lib/libvirt/ssh-keys/${VM_NAME}/id_rsa.pub"
+logger "  Public key: /var/lib/libvirt/cloud-init/${VM_NAME}/id_rsa.pub"
 logger "  Private key: $VM_SSH_PRIVATE_KEY"
 
 mkdir -p "$SHARED_DIR"
 
 # Create cloud-init configuration
 logger "Creating cloud-init configuration..."
-mkdir -p "$CLOUD_INIT_DIR"
 create_user_data "$VM_NAME" "$VM_HOSTNAME" "$VM_SSH_PUBLIC_KEY"
 create_meta_data "$VM_NAME" "$VM_HOSTNAME"
 create_network_config "$VM_IP"
@@ -501,7 +501,7 @@ virt-install \
   --arch x86_64 \
   --os-variant $VM_OS \
   --disk path="$DISK_PATH",size=${DISK_SIZE_GB},format=qcow2,bus=virtio,discard=unmap \
-  --cloud-init user-data="$CLOUD_INIT_DIR/user-data",meta-data="$CLOUD_INIT_DIR/meta-data",network-config="$CLOUD_INIT_DIR/network-config",clouduser-ssh-key="${VM_SSH_PRIVATE_KEY}.pub" \
+  --cloud-init user-data="$VM_DATA_DIR/user-data",meta-data="$VM_DATA_DIR/meta-data",network-config="$VM_DATA_DIR/network-config",clouduser-ssh-key="${VM_SSH_PRIVATE_KEY}.pub" \
   --network network=$NETWORK_NAME,model=virtio \
   --graphics vnc,listen=127.0.0.1 \
   --video virtio \
@@ -517,6 +517,7 @@ virt-install \
   --filesystem type=mount,accessmode=passthrough,driver.type=virtiofs,source.dir="$SHARED_DIR",target.dir=host-shared \
   --import \
   --boot hd \
+  --autostart \
   --autoconsole none
 
 logger "Base VM created. Applying advanced configurations..."
@@ -573,8 +574,8 @@ echo "  MAC Address: $VM_MAC"
 echo "  IP Address:  $VM_IP"
 echo "  Hostname:    $VM_HOSTNAME"
 echo "Cloud-init Configuration:"
-echo "  User-data:   $CLOUD_INIT_DIR/user-data"
-echo "  Meta-data:   $CLOUD_INIT_DIR/meta-data"
+echo "  User-data:   $VM_DATA_DIR/user-data"
+echo "  Meta-data:   $VM_DATA_DIR/meta-data"
 echo "  ISO:         $CLOUD_IMAGE_PATH"
 echo ""
 
