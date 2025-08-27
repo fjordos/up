@@ -172,11 +172,9 @@ packages:
   - curl
   - wget
   - vim
-  - htop
   - net-tools
-  - openssh-server
   - fail2ban
-  - ufw
+  - ktls-utils
 
 # SSH configuration
 ssh_pwauth: false
@@ -189,15 +187,13 @@ runcmd:
   - mkdir -p /var/lib/shared/host
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
-  - systemctl enable ssh
-  - systemctl start ssh
   - systemctl enable fail2ban
   - systemctl start fail2ban
-  - ufw --force enable
-  - ufw allow ssh
-  - ufw allow from 192.168.0.0/16 to any port 22
-  - ufw allow from 10.0.0.0/8 to any port 22
-  - ufw allow from 172.16.0.0/12 to any port 22
+  - firewall-cmd --permanent --add-service ssh
+  - firewall-cmd --permanent --add-service http
+  - firewall-cmd --permanent --add-service https
+  - firewall-cmd --reload
+  - echo "ChallengeResponseAuthentication no" >> /etc/ssh/sshd_config
   - echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
   - echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config
   - echo "PermitRootLogin no" >> /etc/ssh/sshd_config
@@ -229,7 +225,7 @@ write_files:
     permissions: '0440'
 
 mounts:
-- [ /dev/ephemeral0, /var/lib/shared/host, virtiofs ]
+- [ /mnt, ${SHARED_DIR}, nfs4 ]
 
 # Final message
 final_message: "Cloud-init setup complete for $vm_hostname with unique SSH key"
@@ -480,6 +476,22 @@ logger "Creating cloud-init configuration..."
 create_user_data "$VM_NAME" "$VM_HOSTNAME" "$VM_SSH_PUBLIC_KEY"
 create_meta_data "$VM_NAME" "$VM_HOSTNAME"
 create_network_config "$VM_IP"
+if [[ -z "$SSHCMD" ]] ; then
+  VM_IP_PUB="$VM_IP"
+else
+  VM_IP_PUB="${HOST_IP}"
+fi
+
+logger "Create NFS directory on shared storage"
+mkdir -p "$SHARED_DIR"
+NEWL="${SHARED_DIR} ${VM_IP_PUB}(rw,no_root_squash,wdelay,sec=sys:krb5:krb5i:krb5p,async)"
+if [[ -e "/etc/exports.d/$VM_NAME" ]]; then
+  sed -i "s|^$SHARED_DIR .*|${NEWL}|" "/etc/exports.d/$VM_NAME"
+  logger "✓ Updated line in /etc/exports.d/$VM_NAME: $NEWL"
+else
+  echo "$NEWL" > "/etc/exports.d/$VM_NAME"
+  logger "✓ Inserted line in /etc/exports.d/${VM_NAME}: $NEWL"
+fi
 
 if [[ $VCPUS -eq 1 ]]; then
   CPUCORES=1
@@ -514,7 +526,6 @@ virt-install \
   --events on_poweroff=destroy,on_reboot=restart,on_crash=destroy \
   --pm suspend_to_mem.enabled=no,suspend_to_disk.enabled=no \
   --memballoon model=none \
-  --filesystem type=mount,accessmode=passthrough,driver.type=virtiofs,source.dir="$SHARED_DIR",target.dir=host-shared \
   --import \
   --boot hd \
   --autostart \
@@ -542,11 +553,6 @@ logger "Set power management"
 
 logger "Set memballoon to none"
 #virt-xml "$VM_NAME" --edit --memballoon model=none
-
-logger "Add shared filesystem"
-#mkdir -p "$SHARED_DIR"
-#virt-xml "$VM_NAME" --add-device --filesystem \
-#      type=mount,accessmode=passthrough,driver.type=virtiofs,source.dir="$SHARED_DIR",target.dir=host-shared
 
 logger "Remove some unnecessary devices"
 virt-xml "$VM_NAME" --remove-device --input type=tablet 2>/dev/null || true
@@ -615,7 +621,9 @@ if [[ "$VM_STATE" == "running" ]]; then
     if manage_ssh_config_entry "add" "$VM_NAME" "$VM_IP" "$VM_SSH_PRIVATE_KEY"; then
         logger "✓ SSH config updated. You can now connect with: ssh $VM_NAME"
     else
-        echo "⚠ SSH config update failed, but you can still connect with: ssh -i $VM_SSH_PRIVATE_KEY admin@$VM_IP"
+        if manage_ssh_config_entry "update" "$VM_NAME" "$VM_IP" "$VM_SSH_PRIVATE_KEY"; then
+            echo "⚠ SSH config update failed, but you can still connect with: ssh -i $VM_SSH_PRIVATE_KEY admin@$VM_IP"
+        fi
     fi
     # Try to connect and check cloud-init status
     for i in {1..60}; do
