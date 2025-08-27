@@ -9,9 +9,9 @@ VM_OS="${VM_OS:-centos-stream10}"
 
 # Paths and configuration
 DISK_PATH="/var/lib/libvirt/images/${VM_NAME}.qcow2"
-VM_HOSTNAME="${VM_NAME}.${HOST_NAME:-local}.${DOMAIN:-fjordos.net}"
+VM_HOSTNAME="${VM_NAME}.${HOST_DOMAINNAME:-$(hostname)}"
 SHARED_IP="${DEFAULT_SHARED_IP:-192.168.122.1}"
-SHARED_DIR="/mnt/${VM_NAME}"
+SHARED_DIR="${BASE_SHARED_DIR:-/mnt}/${VM_NAME}"
 NETWORK_NAME="${DEFAULT_NETWORK_NAME:-default}"
 VM_DATA_DIR="/var/lib/libvirt/data/${VM_NAME}"
 CLOUD_IMAGES_DIR="/var/lib/libvirt/images/cloud"
