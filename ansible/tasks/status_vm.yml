@@ -1,0 +1,34 @@
+
+---
+- name: Get VM state
+  shell: virsh domstate {{ vm_name }}
+  register: vm_state
+  failed_when: false
+  changed_when: false
+
+- name: Get VM info
+  shell: virsh dominfo {{ vm_name }}
+  register: vm_info
+  failed_when: false
+  changed_when: false
+  when: vm_state.rc == 0
+
+- name: Get VM IP address
+  shell: |
+    virsh net-dumpxml {{ default_network_name }} | \
+    xmllint --xpath "//host[@name='{{ vm_name }}']/@ip" - 2>/dev/null | \
+    sed 's/ip="\([^"]*\)"/\1/'
+  register: vm_ip
+  failed_when: false
+  changed_when: false
+  when: vm_state.rc == 0
+
+- name: Display VM status
+  debug:
+    msg: |
+      VM Status for '{{ vm_name }}':
+      State: {{ vm_state.stdout if vm_state.rc == 0 else 'Not found' }}
+      {% if vm_state.rc == 0 %}
+      IP Address: {{ vm_ip.stdout if vm_ip.stdout else 'Not assigned' }}
+      {{ vm_info.stdout }}
+      {% endif %}

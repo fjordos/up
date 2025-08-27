@@ -1,0 +1,47 @@
+
+#cloud-config
+hostname: {{ vm_hostname }}
+fqdn: {{ vm_hostname }}.local
+
+# Default user configuration
+users:
+  - name: admin
+    groups: wheel
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - {{ ssh_public_key_content.content | b64decode | trim }}
+
+# Package management
+package_update: true
+package_upgrade: true
+packages:
+  - qemu-guest-agent
+  - curl
+  - wget
+  - vim
+  - net-tools
+  - fail2ban
+  - ktls-utils
+  - cachefilesd
+
+# SSH configuration
+ssh_pwauth: false
+disable_root: true
+ssh_authorized_keys:
+  - {{ ssh_public_key_content.content | b64decode | trim }}
+
+# Security configuration
+runcmd:
+  - mkdir -p /var/lib/shared/host
+  - systemctl enable --now qemu-guest-agent
+  - systemctl enable --now fail2ban
+  - firewall-cmd --permanent --add-service ssh
+  - firewall-cmd --permanent --add-service http
+  - firewall-cmd --permanent --add-service https
+  - firewall-cmd --reload
+  - echo "ChallengeResponseAuthentication no" >> /etc/ssh/sshd_config
+  - echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+  - echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config
+  - echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+  - systemctl reload ssh
+  - echo "{{ shared_ip }} {{

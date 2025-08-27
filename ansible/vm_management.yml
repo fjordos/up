@@ -1,0 +1,25 @@
+
+---
+- name: VM Management Playbook
+  hosts: localhost
+  gather_facts: yes
+  become: yes
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    - name: Include VM creation tasks
+      include_tasks: tasks/create_vm.yml
+      when: action == "create"
+
+    - name: Include VM deletion tasks
+      include_tasks: tasks/delete_vm.yml
+      when: action == "delete"
+
+    - name: Include VM status tasks
+      include_tasks: tasks/status_vm.yml
+      when: action == "status"
+
+    - name: Include VM list tasks
+      include_tasks: tasks/list_vms.yml
+      when: action == "list"

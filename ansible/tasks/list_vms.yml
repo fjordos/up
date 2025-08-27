@@ -1,0 +1,12 @@
+
+---
+- name: List all VMs
+  shell: virsh list --all
+  register: all_vms
+  changed_when: false
+
+- name: Display VM list
+  debug:
+    msg: |
+      All Virtual Machines:
+      {{ all_vms.stdout }}

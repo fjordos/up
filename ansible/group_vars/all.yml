@@ -1,0 +1,22 @@
+
+---
+# Default VM configuration
+default_memory_gb: 2
+default_vcpus: 2
+default_disk_size_gb: 20
+default_vm_os: "centos-stream10"
+
+# Network configuration
+default_network_name: "default"
+default_shared_ip: "192.168.122.1"
+base_shared_dir: "/mnt"
+
+# Paths
+libvirt_images_dir: "/var/lib/libvirt/images"
+libvirt_data_dir: "/var/lib/libvirt/data"
+cloud_images_dir: "/var/lib/libvirt/images/cloud"
+
+# Security settings
+can_delete_existing: true
+ssh_key_type: "rsa"
+ssh_key_size: 4096

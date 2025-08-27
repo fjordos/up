@@ -1,0 +1,66 @@
+
+---
+- name: Check if VM exists
+  shell: virsh list --all | grep -q "^ {{ vm_name }} "
+  register: vm_exists
+  failed_when: false
+  changed_when: false
+
+- name: Delete VM if it exists
+  block:
+    - name: Destroy running VM
+      shell: virsh destroy {{ vm_name }}
+      failed_when: false
+
+    - name: Undefine VM
+      shell: virsh undefine {{ vm_name }} --remove-all-storage
+      failed_when: false
+
+    - name: Remove DHCP reservation
+      shell: |
+        virsh net-update {{ default_network_name }} delete ip-dhcp-host \
+          "<host name='{{ vm_name }}'/>" \
+          --live --config
+      failed_when: false
+
+    - name: Remove NFS export
+      file:
+        path: "/etc/exports.d/{{ vm_name }}"
+        state: absent
+      notify: reload nfs exports
+
+    - name: Remove shared directory
+      file:
+        path: "{{ base_shared_dir }}/{{ vm_name }}"
+        state: absent
+
+    - name: Remove VM data directory
+      file:
+        path: "{{ libvirt_data_dir }}/{{ vm_name }}"
+        state: absent
+
+    - name: Remove SSH keys
+      file:
+        path: "/var/lib/libvirt/cloud-init/{{ vm_name }}"
+        state: absent
+
+    - name: Remove SSH config entry
+      blockinfile:
+        path: "{{ ansible_env.HOME }}/.ssh/config"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ vm_name }}"
+        state: absent
+
+    - name: Display deletion message
+      debug:
+        msg: "VM '{{ vm_name }}' has been deleted successfully"
+
+  when: vm_exists.rc == 0
+
+- name: VM not found message
+  debug:
+    msg: "VM '{{ vm_name }}' does not exist"
+  when: vm_exists.rc != 0
+
+  handlers:
+    - name: reload nfs exports
+      shell: exportfs -ra

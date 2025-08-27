@@ -1,0 +1,18 @@
+
+---
+- name: Validate required variables
+  assert:
+    that:
+      - vm_name is defined
+      - vm_name | length > 0
+    fail_msg: "vm_name must be defined and not empty"
+
+- name: Set default values
+  set_fact:
+    vm_memory_gb: "{{ vm_memory_gb | default(default_memory_gb) }}"
+    vm_vcpus: "{{ vm_vcpus | default(default_vcpus) }}"
+    vm_disk_size_gb: "{{ vm_disk_size_gb | default(default_disk_size_gb) }}"
+    vm_os: "{{ vm_os | default(default_vm_os) }}"
+
+- name: Include main VM creation playbook
+  include: create_vm_advanced.yml

@@ -1,0 +1,291 @@
+
+---
+- name: Create and configure advanced VM with cloud-init
+  hosts: localhost
+  gather_facts: yes
+  become: yes
+  vars:
+    vm_name: "{{ vm_name | default('vm-default') }}"
+    memory_gb: "{{ memory_gb | default(2) }}"
+    vcpus: "{{ vcpus | default(2) }}"
+    disk_size_gb: "{{ disk_size_gb | default(20) }}"
+    vm_os: "{{ vm_os | default('centos-stream10') }}"
+    
+    # Paths and configuration
+    disk_path: "/var/lib/libvirt/images/{{ vm_name }}.qcow2"
+    vm_hostname: "{{ vm_name }}.{{ ansible_fqdn }}"
+    shared_ip: "{{ default_shared_ip | default('192.168.122.1') }}"
+    shared_dir: "{{ base_shared_dir | default('/mnt') }}/{{ vm_name }}"
+    network_name: "{{ default_network_name | default('default') }}"
+    vm_data_dir: "/var/lib/libvirt/data/{{ vm_name }}"
+    cloud_images_dir: "/var/lib/libvirt/images/cloud"
+    can_delete: "{{ can_delete | default(true) }}"
+    
+    # Cloud image URLs
+    cloud_images:
+      ubuntu-22.04: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+      ubuntu-20.04: "https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img"
+      debian-12: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
+      centos-stream9: "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2"
+      centos-stream10: "https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-x86_64-10-latest.x86_64.qcow2"
+      fedora-42: "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2"
+
+  tasks:
+    - name: Install required packages for virtualization
+      package:
+        name:
+          - virt-install
+          - qemu-img
+          - libvirt-client
+          - libvirt-daemon
+          - libvirt-daemon-kvm
+          - python3-libvirt
+          - python3-lxml
+        state: present
+
+    - name: Ensure libvirt service is running
+      systemd:
+        name: libvirtd
+        state: started
+        enabled: yes
+
+    - name: Create required directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ vm_data_dir }}"
+        - "{{ cloud_images_dir }}"
+        - "{{ shared_dir }}"
+        - "/var/lib/libvirt/cloud-init/{{ vm_name }}"
+
+    - name: Get network information
+      shell: |
+        virsh net-dumpxml {{ network_name }} 2>/dev/null | xmllint --xpath "string(//dhcp/range/@start)" -
+      register: dhcp_start
+      changed_when: false
+
+    - name: Get DHCP end range
+      shell: |
+        virsh net-dumpxml {{ network_name }} 2>/dev/null | xmllint --xpath "string(//dhcp/range/@end)" -
+      register: dhcp_end
+      changed_when: false
+
+    - name: Get existing DHCP reservations
+      shell: |
+        virsh net-dumpxml {{ network_name }} 2>/dev/null | grep -oP "ip='\K[^']*" | sort -V || true
+      register: existing_ips
+      changed_when: false
+
+    - name: Find next available IP
+      shell: |
+        base_ip=$(echo "{{ dhcp_start.stdout }}" | cut -d. -f1-3)
+        start_host=$(echo "{{ dhcp_start.stdout }}" | cut -d. -f4)
+        end_host=$(echo "{{ dhcp_end.stdout }}" | cut -d. -f4)
+        
+        for i in $(seq $start_host $end_host); do
+          test_ip="${base_ip}.$i"
+          if ! echo "{{ existing_ips.stdout }}" | grep -q "^$test_ip$" && ! ping -c 1 -W 1 "$test_ip" >/dev/null 2>&1; then
+            echo "$test_ip"
+            break
+          fi
+        done
+      register: vm_ip_result
+      changed_when: false
+
+    - name: Set VM IP
+      set_fact:
+        vm_ip: "{{ vm_ip_override | default(vm_ip_result.stdout) }}"
+
+    - name: Generate SSH key for VM
+      openssh_keypair:
+        path: "/var/lib/libvirt/cloud-init/{{ vm_name }}/id_rsa"
+        type: rsa
+        size: 4096
+        comment: "vm-{{ vm_name }}@{{ ansible_hostname }}"
+        force: no
+      register: vm_ssh_key
+
+    - name: Read SSH public key
+      slurp:
+        src: "/var/lib/libvirt/cloud-init/{{ vm_name }}/id_rsa.pub"
+      register: ssh_public_key_content
+
+    - name: Download cloud image
+      get_url:
+        url: "{{ cloud_images[vm_os] }}"
+        dest: "{{ cloud_images_dir }}/{{ cloud_images[vm_os] | basename }}"
+        mode: '0644'
+      register: cloud_image_download
+
+    - name: Create VM disk from cloud image
+      copy:
+        src: "{{ cloud_image_download.dest }}"
+        dest: "{{ disk_path }}"
+        remote_src: yes
+        force: no
+
+    - name: Stop existing VM if running and deletion is allowed
+      block:
+        - name: Check if VM exists
+          shell: virsh list --all | grep -q "^ {{ vm_name }} "
+          register: vm_exists
+          failed_when: false
+          changed_when: false
+
+        - name: Destroy existing VM
+          shell: virsh destroy {{ vm_name }}
+          when: vm_exists.rc == 0 and can_delete
+          failed_when: false
+
+        - name: Undefine existing VM
+          shell: virsh undefine {{ vm_name }}
+          when: vm_exists.rc == 0 and can_delete
+          failed_when: false
+
+    - name: Create cloud-init user-data
+      template:
+        src: user-data.j2
+        dest: "{{ vm_data_dir }}/user-data"
+        mode: '0644'
+
+    - name: Create cloud-init meta-data
+      copy:
+        content: |
+          instance-id: {{ vm_name }}
+          local-hostname: {{ vm_hostname }}
+        dest: "{{ vm_data_dir }}/meta-data"
+        mode: '0644'
+
+    - name: Create cloud-init network-config
+      copy:
+        content: |
+          version: 2
+          ethernets:
+            enp1s0:
+              dhcp4: true
+              dhcp-identifier: mac
+        dest: "{{ vm_data_dir }}/network-config"
+        mode: '0644'
+
+    - name: Configure NFS export
+      lineinfile:
+        path: "/etc/exports.d/{{ vm_name }}"
+        line: "{{ shared_dir }} {{ vm_ip }}(rw,no_root_squash,wdelay,sec=sys)"
+        create: yes
+        mode: '0644'
+      notify: reload nfs exports
+
+    - name: Calculate CPU topology
+      set_fact:
+        cpu_cores: "{{ (vcpus | int / 2) | int if vcpus | int > 1 else 1 }}"
+        cpu_threads: "{{ 2 if vcpus | int > 1 else 1 }}"
+        actual_vcpus: "{{ ((vcpus | int / 2) | int * 2) if vcpus | int > 1 else 1 }}"
+
+    - name: Create VM with virt-install
+      shell: |
+        virt-install \
+          --name "{{ vm_name }}" \
+          --memory "{{ memory_gb | int * 1024 }}" \
+          --memorybacking "hugepages.page.size=1,hugepages.page.unit=GiB,access.mode=shared" \
+          --vcpus "{{ actual_vcpus }}" \
+          --cpu "host-passthrough,cache.mode=passthrough,topology.sockets=1,topology.dies=1,topology.cores={{ cpu_cores }},topology.threads={{ cpu_threads }}" \
+          --machine "q35" \
+          --arch "x86_64" \
+          --os-variant "{{ vm_os }}" \
+          --disk "path={{ disk_path }},size={{ disk_size_gb }},format=qcow2,bus=virtio,discard=unmap" \
+          --cloud-init "user-data={{ vm_data_dir }}/user-data,meta-data={{ vm_data_dir }}/meta-data,network-config={{ vm_data_dir }}/network-config,clouduser-ssh-key={{ vm_ssh_key.filename }}.pub" \
+          --network "network={{ network_name }},model=virtio" \
+          --graphics "vnc,listen=127.0.0.1" \
+          --video "virtio" \
+          --console "pty,target.type=serial" \
+          --channel "unix,target.type=virtio,name=org.qemu.guest_agent.0" \
+          --rng "/dev/random,model=virtio" \
+          --watchdog "i6300esb,action=reset" \
+          --features "acpi=on,apic=on,pmu.state=off,vmport.state=off,smm.state=on" \
+          --clock "offset=utc,rtc_tickpolicy=catchup,pit_tickpolicy=delay,hpet_present=no" \
+          --events "on_poweroff=destroy,on_reboot=restart,on_crash=destroy" \
+          --pm "suspend_to_mem.enabled=no,suspend_to_disk.enabled=no" \
+          --memballoon "model=none" \
+          --import \
+          --boot "hd" \
+          --autostart \
+          --autoconsole "none"
+      register: vm_creation
+
+    - name: Remove unnecessary devices
+      shell: virt-xml {{ vm_name }} --remove-device --input type=tablet
+      failed_when: false
+
+    - name: Get VM MAC address
+      shell: virsh dumpxml {{ vm_name }} | xmllint --xpath "string(//interface/mac/@address)" -
+      register: vm_mac
+      changed_when: false
+
+    - name: Add DHCP reservation
+      shell: |
+        virsh net-update {{ network_name }} add ip-dhcp-host \
+          "<host mac='{{ vm_mac.stdout }}' name='{{ vm_hostname }}' ip='{{ vm_ip }}'/>" \
+          --live --config
+      failed_when: false
+
+    - name: Wait for VM to start
+      wait_for:
+        timeout: 30
+      delegate_to: localhost
+
+    - name: Check VM state
+      shell: virsh domstate {{ vm_name }}
+      register: vm_state
+      changed_when: false
+
+    - name: Update SSH config
+      blockinfile:
+        path: "{{ ansible_env.HOME }}/.ssh/config"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ vm_name }}"
+        block: |
+          Host {{ vm_name }}
+              HostName {{ vm_ip }}
+              User admin
+              IdentityFile {{ vm_ssh_key.filename }}
+              StrictHostKeyChecking yes
+              PasswordAuthentication no
+              PubkeyAuthentication yes
+        create: yes
+        mode: '0600'
+
+    - name: Wait for cloud-init to complete
+      shell: |
+        for i in {1..60}; do
+          if ping -c 1 -W 1 {{ vm_ip }} >/dev/null 2>&1; then
+            if ssh -i {{ vm_ssh_key.filename }} -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null admin@{{ vm_ip }} "cloud-init status --wait" 2>/dev/null; then
+              echo "SUCCESS"
+              exit 0
+            fi
+          fi
+          sleep 10
+        done
+        echo "TIMEOUT"
+      register: cloud_init_wait
+      changed_when: false
+
+    - name: Display VM information
+      debug:
+        msg: |
+          VM '{{ vm_name }}' has been created and configured successfully!
+          Network Configuration:
+            MAC Address: {{ vm_mac.stdout }}
+            IP Address:  {{ vm_ip }}
+            Hostname:    {{ vm_hostname }}
+          Cloud-init Configuration:
+            User-data:   {{ vm_data_dir }}/user-data
+            Meta-data:   {{ vm_data_dir }}/meta-data
+          VM State: {{ vm_state.stdout }}
+          Cloud-init Status: {{ 'Completed' if cloud_init_wait.stdout == 'SUCCESS' else 'May still be initializing' }}
+          
+          You can now connect with: ssh {{ vm_name }}
+
+  handlers:
+    - name: reload nfs exports
+      shell: exportfs -ra
