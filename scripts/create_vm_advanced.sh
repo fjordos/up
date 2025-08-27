@@ -9,7 +9,7 @@ VM_OS="${VM_OS:-centos-stream10}"
 
 # Paths and configuration
 DISK_PATH="/var/lib/libvirt/images/${VM_NAME}.qcow2"
-VM_HOSTNAME="${VM_NAME}.${HOST_DOMAINNAME:-$(hostname)}"
+VM_HOSTNAME="${VM_NAME}.${HOST_DOMAINNAME:=$(hostname)}"
 SHARED_IP="${DEFAULT_SHARED_IP:-192.168.122.1}"
 SHARED_DIR="${BASE_SHARED_DIR:-/mnt}/${VM_NAME}"
 NETWORK_NAME="${DEFAULT_NETWORK_NAME:-default}"
@@ -199,6 +199,7 @@ runcmd:
   - echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config
   - echo "PermitRootLogin no" >> /etc/ssh/sshd_config
   - systemctl reload ssh
+  - echo "${SHARED_IP} ${HOST_DOMAINNAME}" >> /etc/hosts
 
 # Network configuration
 write_files:
@@ -226,7 +227,7 @@ write_files:
     permissions: '0440'
 
 mounts:
-- [ /mnt, ${SHARED_IP}:${SHARED_DIR}, nfs4 ]
+- [ /mnt, ${HOST_DOMAINNAME}:${SHARED_DIR}, nfs4 ]
 
 # Final message
 final_message: "Cloud-init setup complete for $vm_hostname with unique SSH key"
