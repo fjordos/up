@@ -494,6 +494,7 @@ else
   echo "$NEWL" > "/etc/exports.d/$VM_NAME"
   logger "✓ Inserted line in /etc/exports.d/${VM_NAME}: $NEWL"
 fi
+exportfs -ra
 
 if [[ $VCPUS -eq 1 ]]; then
   CPUCORES=1
