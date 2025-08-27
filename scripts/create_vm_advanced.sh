@@ -521,7 +521,6 @@ virt-install \
   --network "network=${NETWORK_NAME},model=virtio" \
   --graphics "vnc,listen=127.0.0.1" \
   --video "virtio" \
-  --console "pty,target.type=serial" \
   --channel "unix,target.type=virtio,name=org.qemu.guest_agent.0" \
   --rng "/dev/random,model=virtio" \
   --watchdog "i6300esb,action=reset" \
