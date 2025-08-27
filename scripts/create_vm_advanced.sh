@@ -176,6 +176,7 @@ packages:
   - net-tools
   - fail2ban
   - ktls-utils
+  - cachefilesd
 
 # SSH configuration
 ssh_pwauth: false
@@ -186,10 +187,8 @@ ssh_authorized_keys:
 # Security configuration
 runcmd:
   - mkdir -p /var/lib/shared/host
-  - systemctl enable qemu-guest-agent
-  - systemctl start qemu-guest-agent
-  - systemctl enable fail2ban
-  - systemctl start fail2ban
+  - systemctl enable --now qemu-guest-agent
+  - systemctl enable --now fail2ban
   - firewall-cmd --permanent --add-service ssh
   - firewall-cmd --permanent --add-service http
   - firewall-cmd --permanent --add-service https
@@ -200,6 +199,8 @@ runcmd:
   - echo "PermitRootLogin no" >> /etc/ssh/sshd_config
   - systemctl reload ssh
   - echo "${SHARED_IP} ${HOST_DOMAINNAME}" >> /etc/hosts
+  - systemctl enable --now cachefilesd
+  - systemctl enable --now tlshd.service
 
 # Network configuration
 write_files:
@@ -227,7 +228,7 @@ write_files:
     permissions: '0440'
 
 mounts:
-- [ /mnt, ${HOST_DOMAINNAME}:${SHARED_DIR}, nfs4 ]
+- [ /mnt, ${HOST_DOMAINNAME}:${SHARED_DIR}, nfs4, fsc,nfsvers=4.2,xprtsec=tls ]
 
 # Final message
 final_message: "Cloud-init setup complete for $vm_hostname with unique SSH key"
@@ -435,11 +436,11 @@ mkdir -p $VM_DATA_DIR
 CLOUD_IMAGE_PATH=$(download_cloud_image "$VM_OS")
 
 # Create VM disk from cloud image
-if [[ ! -f "$DISK_PATH" ]]; then
+if [[ ! -f "${DISK_PATH}" ]]; then
     logger "Creating VM disk from cloud image..."
-    cp "$CLOUD_IMAGE_PATH" "$DISK_PATH"
+    cp "${CLOUD_IMAGE_PATH}" "${DISK_PATH}"
 else
-    logger "VM disk already exists: $DISK_PATH"
+    logger "VM disk already exists: ${DISK_PATH}"
 fi
 
 # Find next available IP
@@ -486,7 +487,7 @@ fi
 
 logger "Create NFS directory on shared storage"
 mkdir -p "$SHARED_DIR"
-NEWL="${SHARED_DIR} ${VM_IP_PUB}(rw,no_root_squash,wdelay,sec=sys:krb5:krb5i:krb5p,async)"
+NEWL="${SHARED_DIR} ${VM_IP_PUB}(rw,no_root_squash,wdelay,sec=sys)"
 if [[ -e "/etc/exports.d/$VM_NAME" ]]; then
   sed -i "s|^$SHARED_DIR .*|${NEWL}|" "/etc/exports.d/$VM_NAME"
   logger "✓ Updated line in /etc/exports.d/$VM_NAME: $NEWL"
@@ -501,38 +502,38 @@ if [[ $VCPUS -eq 1 ]]; then
   CPUTHREADS=1
 else
   CPUCORES=$((VCPUS / 2))
-  VCPUS=$(($CPUCORES * 2 ))
+  VCPUS=$(($CPUCORES * 2))
   CPUTHREADS=2
 fi
 
 # Create the base VM with cloud-init
 virt-install \
-  --name "$VM_NAME" \
-  --memory $((MEMORY_GB * 1024)) \
-  --memorybacking hugepages.page.size=1,hugepages.page.unit=GiB,access.mode=shared \
-  --vcpus $VCPUS \
-  --cpu host-passthrough,cache.mode=passthrough,topology.sockets=1,topology.dies=1,topology.cores=$CPUCORES,topology.threads=$CPUTHREADS \
-  --machine q35 \
-  --arch x86_64 \
-  --os-variant $VM_OS \
-  --disk path="$DISK_PATH",size=${DISK_SIZE_GB},format=qcow2,bus=virtio,discard=unmap \
-  --cloud-init user-data="$VM_DATA_DIR/user-data",meta-data="$VM_DATA_DIR/meta-data",network-config="$VM_DATA_DIR/network-config",clouduser-ssh-key="${VM_SSH_PRIVATE_KEY}.pub" \
-  --network network=$NETWORK_NAME,model=virtio \
-  --graphics vnc,listen=127.0.0.1 \
-  --video virtio \
-  --console pty,target.type=serial \
-  --channel unix,target.type=virtio,name=org.qemu.guest_agent.0 \
-  --rng /dev/random,model=virtio \
-  --watchdog i6300esb,action=reset \
-  --features acpi=on,apic=on,pmu.state=off,vmport.state=off,smm.state=on \
-  --clock offset=utc,rtc_tickpolicy=catchup,pit_tickpolicy=delay,hpet_present=no \
-  --events on_poweroff=destroy,on_reboot=restart,on_crash=destroy \
-  --pm suspend_to_mem.enabled=no,suspend_to_disk.enabled=no \
-  --memballoon model=none \
+  --name "${VM_NAME}" \
+  --memory "$((MEMORY_GB * 1024))" \
+  --memorybacking "hugepages.page.size=1,hugepages.page.unit=GiB,access.mode=shared" \
+  --vcpus "${VCPUS}" \
+  --cpu "host-passthrough,cache.mode=passthrough,topology.sockets=1,topology.dies=1,topology.cores=${CPUCORES},topology.threads=${CPUTHREADS}" \
+  --machine "q35" \
+  --arch "x86_64" \
+  --os-variant "${VM_OS}" \
+  --disk "path=${DISK_PATH},size=${DISK_SIZE_GB},format=qcow2,bus=virtio,discard=unmap" \
+  --cloud-init "user-data=${VM_DATA_DIR}/user-data,meta-data=${VM_DATA_DIR}/meta-data,network-config=${VM_DATA_DIR}/network-config,clouduser-ssh-key=${VM_SSH_PRIVATE_KEY}.pub" \
+  --network "network=${NETWORK_NAME},model=virtio" \
+  --graphics "vnc,listen=127.0.0.1" \
+  --video "virtio" \
+  --console "pty,target.type=serial" \
+  --channel "unix,target.type=virtio,name=org.qemu.guest_agent.0" \
+  --rng "/dev/random,model=virtio" \
+  --watchdog "i6300esb,action=reset" \
+  --features "acpi=on,apic=on,pmu.state=off,vmport.state=off,smm.state=on" \
+  --clock "offset=utc,rtc_tickpolicy=catchup,pit_tickpolicy=delay,hpet_present=no" \
+  --events "on_poweroff=destroy,on_reboot=restart,on_crash=destroy" \
+  --pm "suspend_to_mem.enabled=no,suspend_to_disk.enabled=no" \
+  --memballoon "model=none" \
   --import \
-  --boot hd \
+  --boot "hd" \
   --autostart \
-  --autoconsole none
+  --autoconsole "none"
 
 logger "Base VM created. Applying advanced configurations..."
 
